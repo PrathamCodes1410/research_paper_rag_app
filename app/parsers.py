@@ -1,9 +1,8 @@
-import fitz  # PyMuPDF
+import fitz 
 import os
 from pathlib import Path
 
 def extract_text_and_figures(pdf_path: str, out_dir: str):
-    """Extract text and figures from PDF, save figures as PNG."""
     doc = fitz.open(pdf_path)
     text_chunks = []
     figure_paths = []
@@ -14,7 +13,6 @@ def extract_text_and_figures(pdf_path: str, out_dir: str):
             "page": page_num,
             "text": text
         })
-        # Extract figures
         images = page.get_images(full=True)
         for i, img in enumerate(images):
             xref = img[0]
