@@ -1,77 +1,80 @@
 # Multimodal RAG System with Continual Learning for Scientific Paper Understanding
 
-Summary
-- A research-focused Retrieval-Augmented Generation (RAG) system for scientific papers that handles text, equations, figures and tables, and improves over time from user feedback.
-- Upload PDFs, ask natural-language questions, receive answers with citations to specific figures/equations/sections, and provide corrective feedback to refine retrieval and answers.
-
-Core idea
-- Ingest full scientific PDFs (text + LaTeX equations + figures/diagrams + tables).
-- Build multimodal embeddings and a retrieval layer so answers cite exact paper artifacts.
-- Add a lightweight continual-learning loop: user feedback influences retrieval weighting and answer selection over time.
+Short description
+- Local research-focused Retrieval-Augmented Generation (RAG) that ingests scientific PDFs (text, equations, figures, tables), builds multimodal embeddings, and answers questions with artifact-level citations. Feedback is stored to improve retrieval over time.
 
 Key features
-- PDF upload and parsing (text, structure, equations, images, captions).
-- Multimodal Q&A: answers reference exact pages, figures, equations, and table cells.
-- Source citation UI (which passages/figures were used).
-- Feedback capture: mark answers correct/incorrect and provide corrections.
-- RLHF-lite: feedback updates retrieval weights and context scoring to improve future answers.
+- PDF parsing (text + images) via [`app.parsers.extract_text_and_figures`](app/parsers.py) and an alternate extractor in [`app.rag.extract_text_and_figures`](app/rag.py).
+- Local vector DB (Chroma) initialization in [`app.rag.init_vector_db`](app/rag.py) and document indexing via [`app.rag.add_chunks_to_db`](app/rag.py).
+- Local retrieval + QA with [`app.rag.ask_local_llm`](app/rag.py).
+- Session lifecycle management and cleanup via [`app.rag.cleanup_session`](app/rag.py).
+- Web UI built with Streamlit in [app/ui.py](app/ui.py) that wires upload → ingest → query → feedback.
+- Simple feedback persistence in [app/feedback.py](app/feedback.py).
 
-Technical highlights
-- Multimodal parsing: Nougat (or similar) to extract document structure and equations.
-- Vision understanding: Gemini Multimodel for figure/diagram interpretation.
-- Orchestration & RAG: LangChain to manage document chunking, prompt templates, and retrieval flow.
-- Vector DBs: Chroma or FAISS for embeddings and semantic search (text + image embeddings).
-- Simple feedback DB: SQLite/Postgres to persist user feedback and corrected contexts.
-- Lightweight weighting mechanism: increment retrieval weights for contexts that lead to correct answers; decay for incorrect ones.
+Repository layout
+- [app/](app)
+  - [app/rag.py](app/rag.py) — vector DB helpers, extractors, LLM/RAG pipeline functions
+  - [app/parsers.py](app/parsers.py) — PDF parsing / figure extraction helper
+  - [app/ui.py](app/ui.py) — Streamlit frontend (session, upload, QA, feedback)
+  - [app/feedback.py](app/feedback.py) — lightweight SQLite feedback store
+  - [app/config.py](app/config.py) — env-based configuration
+- data/ — papers, extracted figures and persistent DBs (e.g. [data/vector_db/chroma.sqlite3](data/vector_db/chroma.sqlite3))
+- db/ — local databases (feedback, etc.)
+- requirements.txt — Python deps
+- LICENSE — MIT license
 
-System architecture (high level)
-- PDF Ingest → Parser (text, LaTeX eqns, images) → Chunker + Multimodal embeddings → Vector DB
-- User Query → Retriever (text + image contexts, weighted) → RAG prompt → Multimodal LLM → Answer + citations
-- User Feedback → Feedback DB → Weight updater → Retriever weights adjusted
-
-Quickstart (dev mode)
-1. Requirements
-	- Python 3.10+
-	- API keys for chosen LLMs
-	- Optional GPU for local multi-modal models
-2. Install
-	- pip install -r requirements.txt
-	- Set env vars: OPENAI_API_KEY, OTHER_MODEL_KEYS, VECTOR_DB_PATH
+Quickstart (development)
+1. Prepare
+   - Python 3.10+
+   - Create a virtualenv and install deps:
+     ```sh
+     pip install -r requirements.txt
+     ```
+2. Environment
+   - Set keys and paths in env or a .env file consumed by [app/config.py](app/config.py)
+     - Example: GEMINI_API_KEY, CHROMA_DB_PATH (defaults to ./data/vector_db)
 3. Run
-	- Start vector DB (if using local FAISS/Chroma)
-	- python ingest.py --pdfs ./papers
-	- streamlit run app.py
-4. Minimal usage
-	- Upload a PDF in the UI
-	- Ask a question in natural language
-	- Inspect the answer and cited sources (page, figure number, equation)
-	- Mark answer correct/incorrect and optionally submit corrected context
+   - Start the UI:
+     ```sh
+     streamlit run app/ui.py
+     ```
+   - In the UI: upload a PDF, wait for parsing & indexing, then ask questions.
 
-Implementation notes
-- Parsing: use a PDF pipeline that extracts text blocks with page/coordinates, LaTeX equations (or images of equations decoded), figure crops and captions.
-- Chunking: keep multimodal context aligned (text chunk + proximate figure/image).
-- Embeddings: use a joint embedding scheme (text embeddings + image embeddings with compatible dims) or concat modality-specific embeddings and store with metadata.
-- Retrieval weighting: store a weight per context doc_id. On positive feedback, increment weight (e.g., w <- w + alpha); on negative, decrement or mark for re-evaluation. Use weights in similarity score: score = sim * (1 + beta * normalized_weight).
-- Safety: sanitize and limit context length per prompt. Avoid hallucination by including source snippets and explicit citation instructions in the prompt.
+Core flows & important symbols
+- Ingest/parse:
+  - [`app.parsers.extract_text_and_figures`](app/parsers.py) — low-level PDF page text + image extraction.
+  - [`app.rag.extract_text_and_figures`](app/rag.py) — session-aware extractor that writes figures to session temp dirs.
+- Indexing:
+  - [`app.rag.init_vector_db`](app/rag.py) — creates a session-scoped Chroma DB.
+  - [`app.rag.add_chunks_to_db`](app/rag.py) — converts chunks to `langchain.schema.Document` and indexes.
+- Query:
+  - [`app.rag.ask_local_llm`](app/rag.py) — runs retrieval + local LLM QA and appends figure references.
+- Session:
+  - [`app.rag.cleanup_session`](app/rag.py) — removes per-session temp files and DBs.
+- UI:
+  - [app/ui.py](app/ui.py) — session creation, file upload, and feedback buttons wired to the above functions.
 
-Continual learning detail
-- Feedback lifecycle:
-  1. Capture user rating (correct/incorrect) + optional corrected answer or highlighted passage.
-  2. Persist feedback linked to query, retrieved context IDs, and timestamp.
-  3. Update context weights immediately (online) and log for batch re-ranking or fine-tuning.
-  4. Optionally run periodic offline re-training or tuning of retrieval model (if using trainable retriever).
-- Metrics to track:
-  - Retrieval precision@k before/after feedback
-  - Answer accuracy (human-labeled)
-  - Citation fidelity (percent of answers that correctly cite supporting artifacts)
+Design notes
+- Multimodal alignment: text chunks should be stored together with nearby figure metadata so answers can cite page/figure.
+- Feedback loop: feedback entries in [app/feedback.py](app/feedback.py) should be tied to chunk IDs so retrieval weights can be updated.
+- Safety: the prompt should include explicit citation instructions and context-length limits to reduce hallucinations.
 
+Extending the project
+- Replace or augment embeddings in [`app.rag.init_vector_db`](app/rag.py) with joint text+image embeddings.
+- Add a weighting mechanism using feedback from [app/feedback.py](app/feedback.py) to bias retrieval scores.
+- Improve parsing in [app/parsers.py](app/parsers.py) to recover LaTeX equations and table structure.
+
+Troubleshooting
+- If images fail to extract, check that `PyMuPDF` (`fitz`) is installed and that `app/parsers.py` has permission to write to the temp session directory.
+- If Chroma fails to persist, verify CHROMA_DB_PATH in [app/config.py](app/config.py) and file permissions.
 
 Contributing
-- Open issues for parsers (equations, tables), retriever improvements, and UI features.
-- Keep model keys out of the repo; use env vars and a secrets manager for demo.
+- Open issues/PRs for parser improvements, retrieval weighting, UI polish, and tests.
+- Keep secrets out of the repo; use env vars or a secrets manager.
 
 License
-- Pick an appropriate OSS license (MIT recommended for starters).
+- MIT — see [LICENSE](LICENSE).
 
-Contact / Next steps
-- Prepare curated demo papers, finalize model choices (proprietary vs open), and decide if local GPU inference is required for vision components.
+References
+- Code entry points: [app/rag.py](app/rag.py), [app/parsers.py](app/parsers.py), [app/ui.py](app/ui.py), [app/feedback.py](app/feedback.py), [app/config.py](app/config.py).
+- Requirements: [requirements.txt](requirements.txt)
