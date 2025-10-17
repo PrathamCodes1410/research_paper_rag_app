@@ -67,7 +67,6 @@ def ask_local_llm(vector_db, question, figures=None):
     return context
 
 
-# --- Cleanup ---
 def cleanup_session(session_id: str):
     session_path = TEMP_DIR / session_id
     if session_path.exists():
